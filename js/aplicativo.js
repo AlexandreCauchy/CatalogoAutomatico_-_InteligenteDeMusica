@@ -326,8 +326,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     // Export & Outros
-    document.getElementById('btnExportarPasta').onclick = () => {
-        if (artistaSelecionado) catalogo.exportarPastaZIP(artistaSelecionado, albumSelecionado);
+    document.getElementById('btnExportarTudo').onclick = async () => {
+        // Exportar todo o catálogo como ZIP contendo pastas por artista
+        const artistas = catalogo.getArtistas();
+        for (const artista of artistas) {
+            await catalogo.exportarPastaZIP(artista);
+        }
     };
 
     document.getElementById('btnAdicionarMusica').onclick = () => modalMusica.style.display = 'block';
