@@ -7,35 +7,51 @@ class AnalisadorAudio {
         try {
             const buffer = await file.arrayBuffer();
             const audioBuffer = await this.contexto.decodeAudioData(buffer);
+            const canalData = audioBuffer.getChannelData(0);
 
-            // Análise Espectral (FFT) para Timbre mais preciso (Fingerprint)
-            const offlineCtx = new OfflineAudioContext(1, audioBuffer.length, audioBuffer.sampleRate);
-            const source = offlineCtx.createBufferSource();
-            source.buffer = audioBuffer;
-            const analyser = offlineCtx.createAnalyser();
-            analyser.fftSize = 256;
-            source.connect(analyser);
-            analyser.connect(offlineCtx.destination);
-            source.start(0);
+            // 1. Busca por pico de energia (encontra parte "alta" da música)
+            let maxEnergia = 0;
+            let indicePico = 0;
+            const stepBusca = 5000;
 
-            await offlineCtx.startRendering();
+            for (let i = 0; i < canalData.length; i += stepBusca) {
+                if (Math.abs(canalData[i]) > maxEnergia) {
+                    maxEnergia = Math.abs(canalData[i]);
+                    indicePico = i;
+                }
+            }
 
-            // Captura snapshot de frequência
-            const frequencyData = new Uint8Array(analyser.frequencyBinCount);
-            analyser.getByteFrequencyData(frequencyData);
+            // 2. Extrai amostra ao redor do pico (aprox 10000 amostras)
+            const range = 10000;
+            const inicio = Math.max(0, indicePico - range / 2);
+            const fim = Math.min(canalData.length, indicePico + range / 2);
+            const amostra = canalData.slice(inicio, fim);
 
-            const assinatura = Array.from(frequencyData).filter((v, i) => i % 2 === 0).map(v => v / 255);
-            return assinatura.length > 0 ? assinatura : null;
+            if (amostra.length === 0) return null;
+
+            // 3. Extrai Energy Profile (divide em 10 segmentos)
+            const assinatura = [];
+            const segmentoSize = Math.floor(amostra.length / 10);
+
+            for (let k = 0; k < 10; k++) {
+                let soma = 0;
+                for (let j = 0; j < segmentoSize; j++) {
+                    const idx = k * segmentoSize + j;
+                    if (idx < amostra.length) soma += Math.abs(amostra[idx]);
+                }
+                assinatura.push(parseFloat((soma / segmentoSize).toFixed(5)));
+            }
+
+            return assinatura;
         } catch (e) {
-            console.error("Erro na análise", e);
+            console.error("Erro na análise PCM:", e);
             return null;
         }
     }
 
     comparar(a1, a2) {
         if (!a1 || !a2 || a1.length !== a2.length) return 999;
-        const somaQuad = a1.reduce((acc, val, i) => acc + Math.pow(val - a2[i], 2), 0);
-        return Math.sqrt(somaQuad);
+        return Math.sqrt(a1.reduce((acc, val, i) => acc + Math.pow(val - a2[i], 2), 0));
     }
 }
 
@@ -57,13 +73,27 @@ class CatalogoInteligente {
         const unicas = [];
         const idsParaRemover = [];
         const chavesVistas = new Set();
+        const titulosConhecidos = new Set();
 
+        // 1. Coleta títulos que já têm autor definido
+        this.musicas.forEach(m => {
+            if (m.artista !== "Desconhecido") {
+                titulosConhecidos.add(m.titulo.toLowerCase().trim());
+            }
+        });
+
+        // 2. Filtra duplicatas
         for (const m of this.musicas) {
-            const tituloNorm = m.titulo.toLowerCase().trim().replace(/\s+/g, ' ');
-            const artistaNorm = m.artista.toLowerCase().trim().replace(/\s+/g, ' ');
-            // Chave ignora álbum para evitar duplicação "Desconhecido" vs "Sem Álbum"
-            const chave = `${artistaNorm}||${tituloNorm}`;
+            const tituloNorm = m.titulo.toLowerCase().trim();
+            const artistaNorm = m.artista.toLowerCase().trim();
 
+            // Regra: se é "Desconhecido" mas já existe esse título com autor, remove o desconhecido
+            if (m.artista === "Desconhecido" && titulosConhecidos.has(tituloNorm)) {
+                idsParaRemover.push(m.id);
+                continue;
+            }
+
+            const chave = `${artistaNorm}||${tituloNorm}`; // Ignora álbum na chave
             if (chavesVistas.has(chave)) {
                 idsParaRemover.push(m.id);
             } else {
@@ -73,7 +103,7 @@ class CatalogoInteligente {
         }
 
         if (idsParaRemover.length > 0) {
-            console.log(`Limpando duplicatas: ${idsParaRemover.length} itens removidos.`);
+            console.log(`Limpando ${idsParaRemover.length} duplicatas.`);
             for (const id of idsParaRemover) {
                 await bd.remover('musicas', id);
             }
@@ -84,10 +114,13 @@ class CatalogoInteligente {
     async treinarTudo() {
         this.perfisVocais = {};
         for (const m of this.musicas) {
-            if (m.artista !== "Desconhecido" && m.assinatura) {
-                if (!this.perfisVocais[m.artista]) this.perfisVocais[m.artista] = [];
-                if (this.perfisVocais[m.artista].length < 10) { // Aumentei limite para melhorar precisão
-                    this.perfisVocais[m.artista].push(m.assinatura);
+            if (m.artista !== "Desconhecido") {
+                if (m.assinatura && Array.isArray(m.assinatura) && m.assinatura.length === 10) {
+                    if (!this.perfisVocais[m.artista]) this.perfisVocais[m.artista] = [];
+                    // Limite deslizante para manter a performance, mas com amostras recentes
+                    if (this.perfisVocais[m.artista].length < 15) {
+                        this.perfisVocais[m.artista].push(m.assinatura);
+                    }
                 }
             }
         }
@@ -98,7 +131,6 @@ class CatalogoInteligente {
         let titulo = dados.titulo || (arquivo ? arquivo.name.replace(/\.[^/.]+$/, "") : "Sem Título");
         titulo = titulo.trim();
 
-        // Tratamento robusto de álbum
         let albumFinal = dados.album || "Sem Álbum";
         if (!dados.album && arquivo) {
             const partes = arquivo.name.split(' - ');
@@ -113,10 +145,7 @@ class CatalogoInteligente {
             return chaveExistente === chaveNova;
         });
 
-        if (existe) {
-            console.log("Duplicata detectada e ignorada:", titulo);
-            return existe;
-        }
+        if (existe) return existe;
 
         const assinatura = arquivo ? await this.analisador.analisarArquivo(arquivo) : null;
 
@@ -144,17 +173,22 @@ class CatalogoInteligente {
     }
 
     identificarPossivelAutor(assinatura) {
-        if (!assinatura) return null;
+        if (!assinatura || assinatura.length !== 10) return null;
         let melhorMatch = null;
-        let menorDistancia = 4.0; // Ajustado para tolerância FFT
+        let menorDistancia = 0.05; // Sensibilidade ajustada para Energy Profile (valores normalizados)
 
         for (const artista in this.perfisVocais) {
-            const distancias = this.perfisVocais[artista].map(t => this.analisador.comparar(assinatura, t));
-            const mediaDist = distancias.reduce((a, b) => a + b, 0) / distancias.length;
+            const perfis = this.perfisVocais[artista];
+            if (perfis.length === 0) continue;
 
-            if (mediaDist < menorDistancia) {
-                menorDistancia = mediaDist;
-                melhorMatch = artista;
+            // Compara com a média dos perfis ou o melhor perfil individual?
+            // Melhor perfil individual é mais preciso para variabilidade vocal
+            for (const perfil of perfis) {
+                const dist = this.analisador.comparar(assinatura, perfil);
+                if (dist < menorDistancia) {
+                    menorDistancia = dist;
+                    melhorMatch = artista;
+                }
             }
         }
         return melhorMatch;
@@ -164,12 +198,11 @@ class CatalogoInteligente {
         const index = this.musicas.findIndex(m => m.id === idMusica);
         if (index !== -1) {
             this.musicas[index].artista = novoAutor;
-            // Opcional: tentar inferir álbum de outras músicas do mesmo autor
-            const albumExistente = this.musicas.find(m => m.artista === novoAutor && m.album !== "Sem Álbum");
-            if (albumExistente && this.musicas[index].album === "Sem Álbum") {
-                this.musicas[index].album = albumExistente.album; // Sugestão simples
+            // Tenta mover álbum se possível
+            const exemplo = this.musicas.find(m => m.artista === novoAutor && m.album !== "Sem Álbum");
+            if (exemplo && this.musicas[index].album === "Sem Álbum") {
+                this.musicas[index].album = exemplo.album;
             }
-
             await bd.atualizar('musicas', this.musicas[index]);
             await this.treinarTudo();
             return this.musicas[index];
