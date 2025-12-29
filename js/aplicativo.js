@@ -79,14 +79,22 @@ document.addEventListener('DOMContentLoaded', async () => {
                 playlistAtual = catalogo.getDesconhecidas();
                 renderizarGrade(playlistAtual);
                 break;
+            case 'bancoVoz':
+                document.getElementById('tituloSecao').innerText = 'Banco de Voz (Perfis Biométricos)';
+                renderizarBancoVoz();
+                break;
         }
     }
 
     // --- UPLOAD ---
     async function processarArquivosComAnalise(arquivos) {
-        if (feedbackAnalise) feedbackAnalise.style.display = 'flex';
+        if (feedbackAnalise) {
+            feedbackAnalise.style.display = 'flex';
+            feedbackAnalise.style.opacity = '1';
+        }
+
         for (const arquivo of arquivos) {
-            if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Processando: ${arquivo.name}...`;
+            if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Analisando espectro vocal: ${arquivo.name}...`;
 
             const partes = arquivo.name.split(' - ');
             let artista = partes.length > 1 ? partes[0].trim() : 'Desconhecido';
@@ -96,24 +104,64 @@ document.addEventListener('DOMContentLoaded', async () => {
             const musica = await catalogo.adicionar({ artista, album, titulo }, arquivo);
 
             if (artista === 'Desconhecido' && musica.assinatura) {
-                analisarTimbreManual(musica);
+                // Tenta identificar automaticamente primeiro
+                const match = catalogo.identificarPossivelAutor(musica.assinatura);
+                if (match) {
+                    abrirModalAnalise(musica, match);
+                }
             }
         }
+
         if (feedbackAnalise) feedbackAnalise.style.display = 'none';
         atualizarInterface();
     }
 
+    // --- MODAL & ANÁLISE MANUAL/AUTO ---
+    const modalAnalise = document.getElementById('modalAnaliseVocal');
+    const conteudoAnalise = document.getElementById('conteudoAnaliseResultado');
+    const acoesAnalise = document.getElementById('acoesAnalise');
+
     async function analisarTimbreManual(musica) {
+        if (feedbackAnalise) feedbackAnalise.style.display = 'flex';
+        textoFeedbackAnalise.innerText = 'Comparando assinaturas biométricas...';
+
+        // Simula delay para percepção de análise complexa
+        await new Promise(r => setTimeout(r, 800));
+
         const match = catalogo.identificarPossivelAutor(musica.assinatura);
+        if (feedbackAnalise) feedbackAnalise.style.display = 'none';
+
+        abrirModalAnalise(musica, match);
+    }
+
+    function abrirModalAnalise(musica, match) {
+        if (!modalAnalise) return;
+
         if (match) {
-            if (confirm(`A voz de "${match}" foi identificada na música "${musica.titulo}".\n\nDeseja organizar agora?`)) {
+            conteudoAnalise.innerHTML = `
+                <p>Identificamos com <strong>alta precisão</strong> que a voz nesta música pertence a:</p>
+                <div style="font-size: 1.5rem; font-weight: bold; color: var(--destaque); margin: 10px 0;">${match}</div>
+                <p>Deseja mover a música para a discografia deste artista?</p>
+            `;
+            acoesAnalise.innerHTML = `
+                <button class="botao-acao" id="btnConfirmarMatch">Confirmar e Organizar</button>
+                <button class="botao-acao" style="background: transparent; border: 1px solid var(--texto-secundario);" onclick="document.getElementById('modalAnaliseVocal').style.display='none'">Ignorar</button>
+            `;
+            document.getElementById('btnConfirmarMatch').onclick = async () => {
                 await catalogo.confirmarIdentificacao(musica.id, match);
-                adicionarMensagemChat('ia', `Música "${musica.titulo}" movida para ${match}.`);
+                modalAnalise.style.display = 'none';
+                adicionarMensagemChat('ia', `Organizado: "${musica.titulo}" agora está na pasta de ${match}.`);
                 atualizarInterface();
-            }
-        } else if (abaAtual === 'desconhecidas') {
-            alert(`Não foi possível identificar um autor conhecido para "${musica.titulo}".`);
+            };
+        } else {
+            conteudoAnalise.innerHTML = `
+                <p>Analisamos o espectro vocal, mas <strong>não encontramos correspondência exata</strong> com os perfis cadastrados no Banco de Voz.</p>
+                <p style="font-size: 0.9rem; margin-top: 10px; color: var(--texto-secundario);">A assinatura desta música foi salva e ajudará a identificar este artista no futuro assim que você o nomear manualmente.</p>
+            `;
+            acoesAnalise.innerHTML = `<button class="botao-acao" onclick="document.getElementById('modalAnaliseVocal').style.display='none'">Entendido</button>`;
         }
+
+        modalAnalise.style.display = 'block';
     }
 
     if (inputPasta) {
@@ -152,7 +200,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 <div class="titulo-cartao">${m.titulo}</div>
                 <div class="artista-cartao">${m.artista}</div>
                 <div style="font-size: 0.7rem; color: var(--primaria); opacity: 0.8; margin-top: 4px;">${m.album}</div>
-                ${m.artista === 'Desconhecido' ? `<button class="btn-analisar" style="margin-top:10px; font-size:0.7rem; background: var(--primaria); border:none; color:white; padding:5px; border-radius:4px; cursor:pointer; width:100%;">Analisar Voz</button>` : ''}
+                ${m.artista === 'Desconhecido' ? `<button class="btn-analisar" style="margin-top:10px; font-size:0.75rem; background: var(--primaria); border:none; color:white; padding:6px 10px; border-radius:15px; cursor:pointer; width:100%; transition:0.2s;">🔍 Analisar Voz</button>` : ''}
             `;
 
             card.onclick = (e) => {
@@ -177,6 +225,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             card.innerHTML = `
                 <i class="fas fa-user-circle" style="font-size: 3rem; color: var(--primaria); display: block; margin: 10px auto;"></i>
                 <div class="titulo-cartao">${artista}</div>
+                <div style="font-size: 0.8rem; color: var(--texto-secundario); margin-top: 5px;">${catalogo.getPorArtista(artista).length} faixas</div>
             `;
             card.onclick = () => renderizarAlbuns(artista);
             gradeCatalogo.appendChild(card);
@@ -196,12 +245,48 @@ document.addEventListener('DOMContentLoaded', async () => {
             card.innerHTML = `
                 <i class="fas fa-compact-disc" style="font-size: 3rem; color: var(--destaque); display: block; margin: 10px auto;"></i>
                 <div class="titulo-cartao">${album}</div>
+                <div style="font-size: 0.8rem; color: var(--texto-secundario); margin-top: 5px;">${catalogo.getMusicasPorAlbum(artista, album).length} faixas</div>
             `;
             card.onclick = () => {
                 albumSelecionado = album;
                 document.getElementById('tituloSecao').innerText = `${artista} > ${album}`;
                 renderizarGrade(catalogo.getMusicasPorAlbum(artista, album));
             };
+            gradeCatalogo.appendChild(card);
+        });
+    }
+
+    function renderizarBancoVoz() {
+        gradeCatalogo.innerHTML = '';
+        const artistas = Object.keys(catalogo.perfisVocais).sort();
+        if (artistas.length === 0) {
+            gradeCatalogo.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: var(--texto-secundario);">Nenhum perfil vocal treinado ainda.</p>';
+            return;
+        }
+
+        artistas.forEach(artista => {
+            const card = document.createElement('div');
+            card.className = 'cartao-musica';
+            card.style.cursor = 'default';
+            card.innerHTML = `
+                <div style="position: relative; width: 60px; height: 60px; margin: 0 auto 10px; background: rgba(99, 102, 241, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                    <i class="fas fa-fingerprint" style="font-size: 1.5rem; color: var(--destaque);"></i>
+                    <div style="position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; background: #10b981; border: 2px solid var(--fundo-card); border-radius: 50%;" title="Perfil Ativo"></div>
+                </div>
+                <div class="titulo-cartao" style="font-size: 1.1rem;">${artista}</div>
+                <div style="font-size: 0.8rem; color: var(--texto-secundario); margin-top: 8px;">
+                    ${catalogo.perfisVocais[artista].length} amostras biométricas
+                </div>
+                <div style="margin-top: 10px; height: 30px; display: flex; align-items: flex-end; justify-content: center; gap: 2px; opacity: 0.5;">
+                    <!-- Visualização fake de espectro -->
+                    <div style="width: 3px; height: 40%; background: var(--primaria);"></div>
+                    <div style="width: 3px; height: 70%; background: var(--primaria);"></div>
+                    <div style="width: 3px; height: 100%; background: var(--primaria);"></div>
+                    <div style="width: 3px; height: 60%; background: var(--primaria);"></div>
+                    <div style="width: 3px; height: 80%; background: var(--primaria);"></div>
+                    <div style="width: 3px; height: 50%; background: var(--primaria);"></div>
+                </div>
+            `;
             gradeCatalogo.appendChild(card);
         });
     }
