@@ -83,6 +83,12 @@ class BancoDados {
             request.onerror = () => reject(request.error);
         });
     }
+
+    // Alias used by existing code (catalogo.js) – keeps backward compatibility
+    async remover(storeName, id) {
+        // Delegates to the proper deletar implementation
+        return this.deletar(storeName, id);
+    }
 }
 
 const bd = new BancoDados();

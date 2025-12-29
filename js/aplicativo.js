@@ -87,30 +87,84 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // --- UPLOAD ---
+    // --- UPLOAD ---
+    // --- UPLOAD ---
     async function processarArquivosComAnalise(arquivos) {
         if (feedbackAnalise) {
             feedbackAnalise.style.display = 'flex';
             feedbackAnalise.style.opacity = '1';
         }
 
-        for (const arquivo of arquivos) {
-            if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Analisando espectro vocal: ${arquivo.name}...`;
+        const total = arquivos.length;
+        let count = 0;
+        let artistasDetectados = new Set();
 
+        for (const arquivo of arquivos) {
+            count++;
+            if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Processando ${count}/${total} (Metadados)...`;
+
+            let artista = 'Desconhecido';
+            let album = 'Sem Álbum';
+            let titulo = arquivo.name.replace(/\.[^/.]+$/, "");
+
+            // 1. Tenta pegar do Nome do Arquivo (Artist - Album - Title)
             const partes = arquivo.name.split(' - ');
-            let artista = partes.length > 1 ? partes[0].trim() : 'Desconhecido';
-            let album = partes.length > 2 ? partes[1].trim() : 'Sem Álbum';
-            let titulo = partes.length > 1 ? partes[partes.length - 1].replace(/\.[^/.]+$/, "").trim() : arquivo.name.replace(/\.[^/.]+$/, "");
+            if (partes.length > 1) {
+                artista = partes[0].trim();
+                if (partes.length > 2) album = partes[1].trim();
+                titulo = partes[partes.length - 1].replace(/\.[^/.]+$/, "").trim();
+            }
+
+            // 2. Tenta pegar da Estrutura de Pastas (Prioridade Alta)
+            if (arquivo.webkitRelativePath) {
+                // Ex: "Adele/21/01 Hello.mp3" -> ["Adele", "21", "01 Hello.mp3"]
+                const dirs = arquivo.webkitRelativePath.split('/');
+                if (dirs.length >= 2) {
+                    // dirs[0] pode ser a pasta raiz "Músicas" ou já o artista. 
+                    // Regra heurística: Se só tem 2 níveis (Pasta/Arquivo), Pasta = Artista?
+                    // Se tem 3 (Raiz/Artista/Arquivo), dirs[1] = Artista.
+                    // Vamos assumir: dirs[0] é a pasta selecionada. Se o usuário selecionou "Minhas Musicas", dirs[1] é Artista.
+                    // Se o usuário selecionou "Adele", dirs[0] é "Adele" e dirs[1] é "21" (ou arquivo).
+                    // Para simplificar: dirs[0] é a raiz do upload.
+
+                    if (dirs.length > 2) {
+                        const candArtista = dirs[1].trim();
+                        if (candArtista) artista = candArtista;
+                        if (dirs.length > 3) {
+                            const candAlbum = dirs[2].trim();
+                            if (candAlbum) album = candAlbum;
+                        }
+                    } else if (dirs.length === 2 && dirs[0] !== 'Downloads' && dirs[0] !== 'Music') {
+                        // Caso especial: Selecionou direto a pasta do artista
+                        artista = dirs[0].trim();
+                    }
+                }
+            }
+
+            if (artista !== 'Desconhecido') artistasDetectados.add(artista);
 
             const musica = await catalogo.adicionar({ artista, album, titulo }, arquivo);
 
+            // Identificação para Desconhecidos
             if (artista === 'Desconhecido' && musica.assinatura) {
-                // Tenta identificar automaticamente primeiro
                 const match = catalogo.identificarPossivelAutor(musica.assinatura);
-                if (match) {
-                    abrirModalAnalise(musica, match);
-                }
+                if (match) abrirModalAnalise(musica, match);
             }
         }
+
+        console.log("Artistas detectados no diretório:", Array.from(artistasDetectados));
+
+        // --- AUTOMÁTICO: Treinar Banco de Voz (Extrair Timber) ---
+        if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Extraindo timbres vocais de ${total} arquivos...`;
+
+        // Pequeno delay para a UI renderizar o texto acima
+        await new Promise(r => setTimeout(r, 100));
+
+        const processados = await catalogo.processarPerfisVocais((prog, tot, nome) => {
+            if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Analisando Voz (${prog}/${tot}): ${nome}`;
+        });
+
+        console.log(`Processamento concluído. ${processados} assinaturas geradas.`);
 
         if (feedbackAnalise) feedbackAnalise.style.display = 'none';
         atualizarInterface();
@@ -258,9 +312,39 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function renderizarBancoVoz() {
         gradeCatalogo.innerHTML = '';
+
+        // Header com Ação
+        const header = document.createElement('div');
+        header.style.gridColumn = '1/-1';
+        header.style.marginBottom = '20px';
+        header.style.textAlign = 'center';
+        header.innerHTML = `
+            <p style="color: var(--texto-secundario); margin-bottom: 15px;">
+                O sistema aprende automaticamente o timbre vocal dos artistas baseando-se nas pastas importadas.
+            </p>
+            <button id="btnForcarAnalise" class="botao-acao" style="background: var(--destaque); font-size: 0.9rem;">
+                <i class="fas fa-sync-alt"></i> Reprocessar Timbres
+            </button>
+        `;
+        gradeCatalogo.appendChild(header);
+
+        document.getElementById('btnForcarAnalise').onclick = async () => {
+            if (feedbackAnalise) feedbackAnalise.style.display = 'flex';
+            await catalogo.processarPerfisVocais((prog, tot, nome) => {
+                if (textoFeedbackAnalise) textoFeedbackAnalise.innerText = `Extraindo Voz (${prog}/${tot}): ${nome}`;
+            });
+            if (feedbackAnalise) feedbackAnalise.style.display = 'none';
+            renderizarBancoVoz();
+        };
+
         const artistas = Object.keys(catalogo.perfisVocais).sort();
         if (artistas.length === 0) {
-            gradeCatalogo.innerHTML = '<p style="grid-column: 1/-1; text-align: center; color: var(--texto-secundario);">Nenhum perfil vocal treinado ainda.</p>';
+            const aviso = document.createElement('p');
+            aviso.style.gridColumn = '1/-1';
+            aviso.style.textAlign = 'center';
+            aviso.style.color = 'var(--texto-secundario)';
+            aviso.innerText = 'Nenhum perfil vocal treinado ainda. Importe pastas com nomes de artistas para começar.';
+            gradeCatalogo.appendChild(aviso);
             return;
         }
 
@@ -268,24 +352,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             const card = document.createElement('div');
             card.className = 'cartao-musica';
             card.style.cursor = 'default';
+            const qtdAmostras = catalogo.perfisVocais[artista].length;
+
+            // Cor baseada na quantidade de amostras (mais verde = melhor)
+            const confianca = Math.min(qtdAmostras * 10, 100);
+
             card.innerHTML = `
-                <div style="position: relative; width: 60px; height: 60px; margin: 0 auto 10px; background: rgba(99, 102, 241, 0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
-                    <i class="fas fa-fingerprint" style="font-size: 1.5rem; color: var(--destaque);"></i>
-                    <div style="position: absolute; bottom: 0; right: 0; width: 15px; height: 15px; background: #10b981; border: 2px solid var(--fundo-card); border-radius: 50%;" title="Perfil Ativo"></div>
+                <div style="position: relative; width: 60px; height: 60px; margin: 0 auto 10px; background: rgba(99, 102, 241, 0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                    <i class="fas fa-microphone-alt" style="font-size: 1.5rem; color: var(--primaria);"></i>
+                    <div style="position: absolute; bottom: 0; right: 0; width: 18px; height: 18px; background: hsl(${confianca}, 70%, 50%); border: 3px solid var(--fundo-card); border-radius: 50%;" title="Qualidade do Modelo: ${confianca}%"></div>
                 </div>
                 <div class="titulo-cartao" style="font-size: 1.1rem;">${artista}</div>
                 <div style="font-size: 0.8rem; color: var(--texto-secundario); margin-top: 8px;">
-                    ${catalogo.perfisVocais[artista].length} amostras biométricas
+                    ${qtdAmostras} amostras
                 </div>
-                <div style="margin-top: 10px; height: 30px; display: flex; align-items: flex-end; justify-content: center; gap: 2px; opacity: 0.5;">
-                    <!-- Visualização fake de espectro -->
-                    <div style="width: 3px; height: 40%; background: var(--primaria);"></div>
-                    <div style="width: 3px; height: 70%; background: var(--primaria);"></div>
-                    <div style="width: 3px; height: 100%; background: var(--primaria);"></div>
-                    <div style="width: 3px; height: 60%; background: var(--primaria);"></div>
-                    <div style="width: 3px; height: 80%; background: var(--primaria);"></div>
-                    <div style="width: 3px; height: 50%; background: var(--primaria);"></div>
+                <div style="margin-top: 15px; height: 4px; background: #333; border-radius: 2px; overflow: hidden;">
+                    <div style="width: ${confianca}%; height: 100%; background: linear-gradient(to right, var(--primaria), var(--destaque));"></div>
                 </div>
+                <div style="font-size: 0.7rem; color: #aaa; margin-top: 4px; text-align: right;">Precisão IA</div>
             `;
             gradeCatalogo.appendChild(card);
         });

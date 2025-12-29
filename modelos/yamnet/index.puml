@@ -1,0 +1,34 @@
+@startuml
+class CatalogoAutomatico {
+  0 auto
+  10px 20px
+  12px 15px
+  8px 0
+  10px 0
+  solid transparent
+  15px 0
+  10px 0
+  15px 0
+  15px 0
+  return null
+  return null
+  return artista
+  let catalogo
+  rgba(0, 0, 0, 0.3): 60px
+  rgba(0, 0, 0, 0.1): 15px
+  iniciar(): async
+  processarArquivos(files): async
+  Promise((resolve): new
+  Date(): new
+  Date(): new
+  analisarVoz(): async
+  Date(): new
+  Date(): new
+  FileReader(): new
+  Set(m.hasTags): new
+  desenhar(): function
+  Date(): new
+  CatalogoAutomatico(): new
+  setTimeout((): delay
+}
+@enduml
