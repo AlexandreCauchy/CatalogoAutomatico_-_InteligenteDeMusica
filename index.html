@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SonicHub | Catálogo Inteligente</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/estilo.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+
+<body>
+    <div class="container-app">
+        <header>
+            <div class="logotipo">SONICHUB</div>
+            <div class="acoes-cabecalho">
+                <input type="text" class="barra-pesquisa" placeholder="Pesquisar artistas, álbuns..."
+                    id="campoPesquisa">
+            </div>
+            <div class="perfil-usuario" style="display: flex; gap: 15px; align-items: center;">
+                <label for="inputPasta" title="Carregar Pasta">
+                    <i class="fas fa-folder-plus"
+                        style="color: var(--primaria); font-size: 1.5rem; cursor: pointer;"></i>
+                </label>
+                <input type="file" id="inputPasta" webkitdirectory directory multiple style="display: none;">
+
+                <i class="fas fa-plus-circle" id="btnAdicionarMusica" title="Adicionar Música"
+                    style="color: var(--primaria); font-size: 1.5rem; cursor: pointer;"></i>
+                <i class="fas fa-file-export" id="btnExportarTudo" title="Exportar Catálogo"
+                    style="color: var(--destaque); font-size: 1.5rem; cursor: pointer;"></i>
+            </div>
+        </header>
+
+        <div class="conteudo-principal">
+            <aside>
+                <div class="item-navegacao ativo" data-aba="catalogo">
+                    <i class="fas fa-th-large"></i>
+                    <span>Catálogo</span>
+                </div>
+                <div class="item-navegacao" data-aba="pastas">
+                    <i class="fas fa-folder"></i>
+                    <span>Pastas de Autores</span>
+                </div>
+                <div class="item-navegacao" data-aba="desconhecidas">
+                    <i class="fas fa-question-circle"></i>
+                    <span>Desconhecidas</span>
+                </div>
+            </aside>
+
+
+            <main>
+                <div id="secaoCabecalhoMain"
+                    style="padding: 2rem 2rem 0; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 15px;">
+                        <button id="btnVoltarNivel" class="botao-acao"
+                            style="display: none; width: auto; padding: 0.5rem 1rem; background: rgba(255,255,255,0.1);"><i
+                                class="fas fa-arrow-left"></i> Voltar</button>
+                        <h2 id="tituloSecao">Meu Catálogo</h2>
+                    </div>
+                    <div id="controlesPasta" style="display: none;">
+                        <button class="botao-acao" id="btnExportarPasta"
+                            style="padding: 0.5rem 1rem; font-size: 0.8rem; width: auto;">Exportar ZIP</button>
+                    </div>
+                </div>
+
+                <!-- Feedback de Análise de Timbre (Visível) -->
+                <div id="feedbackAnalise"
+                    style="margin: 1rem 2rem; padding: 1rem; background: rgba(99, 102, 241, 0.15); border-left: 4px solid #6366f1; border-radius: 8px; display: none; align-items: center; gap: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                    <div class="spinner-ia"
+                        style="width: 20px; height: 20px; border: 2px solid #6366f1; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;">
+                    </div>
+                    <span id="textoFeedbackAnalise"
+                        style="font-size: 0.9rem; font-weight: 500; color: #a5b4fc;">Analisando timbre vocal da
+                        música...</span>
+                </div>
+
+                <div class="grade-catalogo" id="gradeCatalogo">
+                    <!-- Cartões de música injetados via JS -->
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- Modal Adicionar Música Simplificado -->
+    <div id="modalMusica" class="modal">
+        <div class="conteudo-modal">
+            <h2 id="tituloModal" style="margin-bottom: 1.5rem;">Carregar Nova Música</h2>
+            <form id="formularioMusica">
+                <div style="margin-bottom: 1.5rem; text-align: left;">
+                    <label
+                        style="display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--texto-secundario);">Escolha
+                        o arquivo (o sistema identificará o timbre automaticamente)</label>
+                    <input type="file" id="inputAudio" class="campo-entrada" accept="audio/*" required>
+                </div>
+                <button type="submit" class="botao-acao">Iniciar Processamento</button>
+                <button type="button" id="btnFecharModal"
+                    style="width: 100%; padding: 1rem; margin-top: 0.5rem; background: transparent; color: var(--texto-secundario); border: none; cursor: pointer;">Cancelar</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Assistente de Chat (SMS/Conversa) -->
+    <div class="janela-chat" id="janelaChat">
+        <div class="chat-cabecalho" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div class="status-ia"></div>
+                <strong>SonicAssist</strong>
+            </div>
+            <i class="fas fa-times" id="btnFecharChat" style="cursor: pointer; opacity: 0.7;"></i>
+        </div>
+        <div class="mensagens-chat" id="mensagensChat">
+            <div class="mensagem ia">Olá! Envie uma mensagem e eu te ajudo a gerenciar suas músicas.</div>
+        </div>
+        <div class="entrada-chat">
+            <input type="text" id="inputChat" class="campo-chat" placeholder="Escreva seu SMS aqui...">
+            <button id="btnEnviarChat" style="background: none; border: none; padding: 5px; cursor: pointer;">
+                <i class="fas fa-paper-plane" style="color: var(--primaria); font-size: 1.2rem;"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Botão Abrir Chat -->
+    <div id="btnAbrirChat"
+        style="display: none; position: fixed; bottom: 100px; right: 2rem; width: 55px; height: 55px; background: var(--primaria); border-radius: 50%; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 5px 15px rgba(0,0,0,0.3); z-index: 1000;">
+        <i class="fas fa-sms" style="color: white; font-size: 1.4rem;"></i>
+    </div>
+
+    <!-- Player Barra -->
+    <div class="player-barra">
+        <div class="info-musica-player">
+            <img src="assets/img/hero.png" class="capa-player" id="playerCapa">
+            <div>
+                <div id="playerTitulo" style="font-weight: 600; font-size: 0.9rem;">Nenhuma tocando</div>
+                <div id="playerArtista" style="color: var(--texto-secundario); font-size: 0.8rem;">---</div>
+            </div>
+        </div>
+        <div class="controles-player" style="display: flex; align-items: center; gap: 20px;">
+            <i class="fas fa-step-backward" id="btnVoltar" style="cursor: pointer; opacity: 0.8;"></i>
+            <i class="fas fa-play" id="btnPlay" style="font-size: 1.5rem; cursor: pointer;"></i>
+            <i class="fas fa-step-forward" id="btnAvancar" style="cursor: pointer; opacity: 0.8;"></i>
+        </div>
+        <div class="progresso-container">
+            <div class="barra-progresso">
+                <div class="progresso-atual" id="progressoAtual"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <style>
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        /* Garantir que o botão de enviar chat herde o estilo correto */
+        #btnEnviarChat:hover i {
+            transform: scale(1.1);
+            transition: 0.2s;
+        }
+    </style>
+
+    <script src="js/bd.js"></script>
+    <script src="js/catalogo.js"></script>
+    <script src="js/assistente.js"></script>
+    <script src="js/aplicativo.js"></script>
+</body>
+
+</html>
