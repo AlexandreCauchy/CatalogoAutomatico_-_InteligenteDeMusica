@@ -8,25 +8,35 @@ class AnalisadorAudio {
     async carregarModelo() {
         if (this.modelo) return this.modelo;
         if (this.carregandoModelo) {
-            // Aguarda carregamento se já estiver em andamento
             while (this.carregandoModelo) await new Promise(r => setTimeout(r, 100));
             return this.modelo;
         }
 
+        this.carregandoModelo = true;
+
+        // 1. Tenta carregar localmente (funciona se estiver rodando em servidor http/localhost)
         try {
-            this.carregandoModelo = true;
-            console.log("Carregando modelo YAMNet local...");
-            // Carrega o modelo graph model do diretório local
-            // Ajuste o caminho conforme a estrutura exata. Se falhar, verifique se o servidor serve arquivos estáticos corretamente.
+            console.log("Tentando carregar modelo YAMNet local...");
             this.modelo = await tf.loadGraphModel('modelos/yamnet/model.json');
-            console.log("Modelo YAMNet carregado com sucesso.");
-            return this.modelo;
+            console.log("Modelo YAMNet LOCAL carregado com sucesso.");
         } catch (e) {
-            console.error("Erro ao carregar YAMNet:", e);
-            return null;
+            console.warn("Falha ao carregar modelo local (provável erro de CORS/file://). Tentando TFHub...", e.message);
+
+            // 2. Fallback para TFHub oficial (funciona em file:// se tiver internet)
+            try {
+                // Utiliza a URL do TFHub com a flag fromTFHub: true para lidar com redirecionamentos
+                const tfhubUrl = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1';
+                this.modelo = await tf.loadGraphModel(tfhubUrl, { fromTFHub: true });
+                console.log("Modelo YAMNet (TFHub) carregado com sucesso.");
+            } catch (err2) {
+                console.error("Erro fatal: Não foi possível carregar o YAMNet nem local nem via TFHub.", err2);
+                this.modelo = null;
+            }
         } finally {
             this.carregandoModelo = false;
         }
+
+        return this.modelo;
     }
 
     async analisarArquivo(file) {
@@ -37,40 +47,83 @@ class AnalisadorAudio {
 
             const buffer = await file.arrayBuffer();
             const audioBuffer = await this.contexto.decodeAudioData(buffer);
+            const rawData = audioBuffer.getChannelData(0);
 
-            // YAMNet requer áudio a 16kHz Mono.
-            const offlineCtx = new OfflineAudioContext(1, audioBuffer.duration * 16000, 16000);
+            // Otimização: Analisar apenas 30 segundos (ou duração total se menor)
+            // Estratégia: Encontrar o ponto de maior energia (refrão/voz forte)
+            const sampleRate = audioBuffer.sampleRate;
+            const duration = audioBuffer.duration;
+            const targetDuration = 30;
+
+            let startSample = 0;
+            let endSample = rawData.length;
+
+            if (duration > targetDuration) {
+                // Busca janela de maior energia (janelas de 5s para ser rápido)
+                const windowSize = 5 * sampleRate;
+                let maxEnergy = 0;
+                let bestStart = 0;
+
+                // Pula os primeiros 10% (intro) e últimos 10% (fadeout)
+                const searchStart = Math.floor(rawData.length * 0.1);
+                const searchEnd = Math.floor(rawData.length * 0.9);
+
+                for (let i = searchStart; i < searchEnd - windowSize; i += windowSize) {
+                    let energy = 0;
+                    // Amostragem simples para calcular energia (pula samples para performance)
+                    for (let j = 0; j < windowSize; j += 1000) {
+                        energy += Math.abs(rawData[i + j]);
+                    }
+                    if (energy > maxEnergy) {
+                        maxEnergy = energy;
+                        bestStart = i;
+                    }
+                }
+
+                // Define o trecho de 30s centralizado na parte de maior energia
+                const halfTarget = (targetDuration * sampleRate) / 2;
+                startSample = Math.max(0, bestStart - halfTarget + (windowSize / 2));
+                endSample = Math.min(rawData.length, startSample + (targetDuration * sampleRate));
+
+                // Ajuste fino se estourou limites
+                if (endSample - startSample < targetDuration * sampleRate) {
+                    startSample = Math.max(0, endSample - (targetDuration * sampleRate));
+                }
+            }
+
+            // Cria buffer menor apenas com o trecho selecionado
+            const fragmentLength = endSample - startSample;
+            const offlineCtx = new OfflineAudioContext(1, (targetDuration * 16000), 16000);
+
+            // Copia apenas o trecho necessário para um buffer temporário
+            const tempBuffer = this.contexto.createBuffer(1, fragmentLength, sampleRate);
+            tempBuffer.copyToChannel(rawData.slice(startSample, endSample), 0);
+
             const source = offlineCtx.createBufferSource();
-            source.buffer = audioBuffer;
+            source.buffer = tempBuffer;
             source.connect(offlineCtx.destination);
             source.start(0);
 
             const resampled = await offlineCtx.startRendering();
             const data = resampled.getChannelData(0);
 
-            // Corta para caber na análise se for muito longo ou muito curto?
-            // YAMNet aceita qualquer tamanho, mas retorna frames. Vamos pegar uma representação média.
-            // Para simplificar e evitar estouro de memória, pegamos os primeiros 10-30 segundos se possível.
-            // O modelo espera valores float32 entre -1 e 1.
+            // Verifica se tem áudio suficiente após resampling
+            if (data.length < 16000) return null; // Menos de 1s de áudio útil?
 
             // Executa inferência
             // tf.tidy garante limpeza de tensores intermediários
             const signatures = tf.tidy(() => {
                 const tensor = tf.tensor(data);
                 // O modelo YAMNet retorna [scores, embeddings, log_mel_spectrogram]
-                // Queremos as embeddings (segunda saída geralmente, ou nomeada)
-                // Se executeAsync retornar array:
                 return this.modelo.predict(tensor);
             });
 
-            // YAMNet (tfjs graph model export) tipicamente retorna: [scores, embeddings, spectrogram]
-            // Vamos assumir que retorna um array de Tensor. 
-            // Precisamos descobrir qual index é a embedding. Geralmente é o index 1 (1024 dims).
+            // Recupera embeddings
             let embeddingsTensor;
             if (Array.isArray(signatures)) {
                 embeddingsTensor = signatures[1];
             } else {
-                embeddingsTensor = signatures; // Fallback se retornar só um
+                embeddingsTensor = signatures;
             }
 
             if (!embeddingsTensor) return null;
